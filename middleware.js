@@ -1,67 +1,46 @@
-// middleware.js — Vercel Routing Middleware (framework-agnostic)
+// middleware.js — Vercel Routing Middleware for non-Next apps
 
-// Protect everything except assets and common static files
 export const config = {
+    // protect everything except static assets & common files
     matcher: ["/((?!assets|favicon.ico|robots.txt).*)"],
   };
   
-  // ---- optional: tiny logger to your Google Apps Script ----
+  // optional logging to a Google Apps Script endpoint set in env var LOG_ENDPOINT
   async function log(event, req, extra = {}) {
-    const endpoint = process.env.LOG_ENDPOINT; // set in Vercel → Project → Settings → Env Vars
-    if (!endpoint) return; // logging is optional
-  
+    const endpoint = process.env.LOG_ENDPOINT;
+    if (!endpoint) return;
     const url = new URL(req.url);
     const ip =
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      req.headers.get("x-real-ip") ||
-      "unknown";
+      req.headers.get("x-real-ip") || "unknown";
     const ua = req.headers.get("user-agent") || "";
     const ref = req.headers.get("referer") || "";
-  
-    const payload = {
-      event,
-      ts: new Date().toISOString(),
-      url: url.toString(),
-      ref,
-      ip,
-      ua,
-      ...extra,
-    };
-  
+    const payload = { event, ts: new Date().toISOString(), url: url.toString(), ref, ip, ua, ...extra };
     try {
       await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "text/plain" },
         body: JSON.stringify(payload),
       });
-    } catch (_) {
-      // never block on logging
-    }
+    } catch {}
   }
   
   export default async function middleware(req) {
     const url = new URL(req.url);
-    const token = process.env.ACCESS_TOKEN || ""; // set in Vercel env
-    const qp = url.searchParams.get("t");        // token if passed in URL
+    const token = process.env.ACCESS_TOKEN || "";
+    const qp = url.searchParams.get("t");
   
-    // read cookie value (Edge-safe)
+    // read the cookie
     const cookieHeader = req.headers.get("cookie") || "";
-    const cookieVal = cookieHeader
-      .split(";")
-      .map((s) => s.trim())
-      .find((s) => s.startsWith("bday_auth="))
-      ?.split("=")[1] || "";
+    const cookieVal =
+      cookieHeader.split(";").map(s => s.trim()).find(s => s.startsWith("bday_auth="))?.split("=")[1] || "";
   
     await log("attempt", req, { token_ok: qp === token || cookieVal === token });
   
-    // If query token is correct → set cookie, strip ?t=, and redirect
+    // token via query → set cookie + redirect to clean URL
     if (qp && token && qp === token) {
       url.searchParams.delete("t");
-      const res = new Response(null, {
-        status: 302,
-        headers: { Location: url.toString() },
-      });
-      // session cookie for 7 days
+      const res = new Response(null, { status: 302, headers: { Location: url.toString() } });
       res.headers.append(
         "Set-Cookie",
         `bday_auth=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${60 * 60 * 24 * 7}`
@@ -70,15 +49,14 @@ export const config = {
       return res;
     }
   
-    // Valid cookie? allow through (return undefined to continue)
+    // valid cookie → allow
     if (cookieVal && token && cookieVal === token) {
       await log("visit", req, { token_ok: true });
-      return;
+      return; // continue
     }
   
-    // Denied → show gate page
+    // denied → gate page
     await log("denied", req, { token_ok: false });
-  
     const gate = `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/><title>Private</title>
   <style>body{margin:0;display:grid;place-items:center;height:100vh;background:#0b0f1a;color:#f7f8ff;font-family:system-ui,Segoe UI,Roboto,Arial}
@@ -94,10 +72,6 @@ export const config = {
   document.getElementById('go').addEventListener('click', ()=>{const v=document.getElementById('code').value.trim();if(!v)return;const u=new URL(location.href);u.searchParams.set('t',v);location.href=u.toString();});
   document.getElementById('code').addEventListener('keyup', (e)=>{ if(e.key==='Enter') document.getElementById('go').click(); });
   </script></body></html>`;
-  
-    return new Response(gate, {
-      status: 401,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-    });
+    return new Response(gate, { status: 401, headers: { "Content-Type": "text/html; charset=utf-8" } });
   }
   
